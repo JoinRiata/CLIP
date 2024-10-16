@@ -34,9 +34,9 @@ class Bottleneck(nn.Module):
         if stride > 1 or inplanes != planes * Bottleneck.expansion:
             # downsampling layer is prepended with an avgpool, and the subsequent convolution has stride 1
             self.downsample = nn.Sequential(OrderedDict([
-                ("-1", nn.AvgPool2d(stride)),
-                ("0", nn.Conv2d(inplanes, planes * self.expansion, 1, stride=1, bias=False)),
-                ("1", nn.BatchNorm2d(planes * self.expansion))
+                ("avgpool", nn.AvgPool2d(stride)),
+                ("conv", nn.Conv2d(inplanes, planes * self.expansion, 1, stride=1, bias=False)),
+                ("bn", nn.BatchNorm2d(planes * self.expansion))
             ]))
 
     def forward(self, x: torch.Tensor):
