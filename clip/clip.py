@@ -201,6 +201,71 @@ def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_a
 
     return model, _transform(model.input_resolution.item())
 
+def load_original_clip(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu", jit: bool = False, download_root: str = None):
+    """
+    Load a CLIP model with modified state_dict keys to handle renamed layers.
+
+    Parameters
+    ----------
+    name : str
+        A model name listed by `clip.available_models()`, or the path to a model checkpoint containing the state_dict
+
+    device : Union[str, torch.device]
+        The device to put the loaded model
+
+    jit : bool
+        Whether to load the optimized JIT model or more hackable non-JIT model (default).
+
+    download_root: str
+        path to download the model files; by default, it uses "~/.cache/clip"
+
+    Returns
+    -------
+    model : torch.nn.Module
+        The CLIP model with fixed state_dict keys
+
+    preprocess : Callable[[PIL.Image], torch.Tensor]
+        A torchvision transform that converts a PIL image into a tensor that the returned model can take as its input
+    """
+    # Load the original model and preprocess
+    model, preprocess = load(name, device=device, jit=jit, download_root=download_root)
+
+    # If the model was loaded as a JIT model, we cannot modify its state_dict
+    if jit:
+        warnings.warn("JIT models cannot be modified. Returning the original JIT model.")
+        return model, preprocess
+
+    # Define a helper function to rename state_dict keys
+    def rename_state_dict_keys(state_dict):
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            # Replace 'downsample.0' with 'downsample.conv'
+            key = key.replace('downsample.0', 'downsample.conv')
+            # Replace 'downsample.1' with 'downsample.bn'
+            key = key.replace('downsample.1', 'downsample.bn')
+            # Add any additional renaming rules here if necessary
+            new_state_dict[key] = value
+        return new_state_dict
+
+    # Rename the keys in the state_dict
+    modified_state_dict = rename_state_dict_keys(model.state_dict())
+
+    # Rebuild the model with the modified state_dict
+    fixed_model = build_model(modified_state_dict).to(device)
+
+    # Load the modified state_dict into the fixed_model
+    missing_keys, unexpected_keys = fixed_model.load_state_dict(modified_state_dict, strict=False)
+
+    # Optionally, print missing and unexpected keys for debugging
+    if missing_keys:
+        print("Missing keys when loading state_dict:", missing_keys)
+    if unexpected_keys:
+        print("Unexpected keys when loading state_dict:", unexpected_keys)
+
+    # Set the fixed_model to evaluation mode
+    fixed_model.eval()
+
+    return fixed_model, _transform(fixed_model.visual.input_resolution)
 
 def tokenize(texts: Union[str, List[str]], context_length: int = 77, truncate: bool = False) -> Union[torch.IntTensor, torch.LongTensor]:
     """
