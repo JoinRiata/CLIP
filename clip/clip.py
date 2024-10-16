@@ -203,7 +203,7 @@ def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_a
     return model, _transform(model.input_resolution.item())
 
 
-def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu", 
+def load_old_names(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu", 
          jit: bool = False, download_root: str = None):
     """Load a CLIP model
 
