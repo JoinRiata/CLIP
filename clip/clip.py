@@ -203,10 +203,9 @@ def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_a
     return model, _transform(model.input_resolution.item())
 
 
-def load_original(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu", 
-                  jit: bool = False, download_root: str = None):
-    """
-    Load a CLIP model with modified state_dict keys to handle renamed layers.
+def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu", 
+         jit: bool = False, download_root: str = None):
+    """Load a CLIP model
 
     Parameters
     ----------
@@ -225,20 +224,30 @@ def load_original(name: str, device: Union[str, torch.device] = "cuda" if torch.
     Returns
     -------
     model : torch.nn.Module
-        The CLIP model with fixed state_dict keys
+        The CLIP model
 
     preprocess : Callable[[PIL.Image], torch.Tensor]
         A torchvision transform that converts a PIL image into a tensor that the returned model can take as its input
     """
-    # Load the original model and preprocess
-    model, preprocess = load(name, device=device, jit=jit, download_root=download_root)
+    if name in _MODELS:
+        model_path = _download(_MODELS[name], download_root or os.path.expanduser("~/.cache/clip"))
+    elif os.path.isfile(name):
+        model_path = name
+    else:
+        raise RuntimeError(f"Model {name} not found; available models = {available_models()}")
 
-    # If the model was loaded as a JIT model, we cannot modify its state_dict
-    if jit:
-        warnings.warn("JIT models cannot be modified. Returning the original JIT model.")
-        return model, preprocess
+    with open(model_path, 'rb') as opened_file:
+        try:
+            # loading JIT archive
+            model = torch.jit.load(opened_file, map_location=device if jit else "cpu").eval()
+            state_dict = None
+        except RuntimeError:
+            # loading saved state dict
+            if jit:
+                warnings.warn(f"File {model_path} is not a JIT archive. Loading as a state dict instead")
+                jit = False
+            state_dict = torch.load(opened_file, map_location="cpu")
 
-    # Define a helper function to rename state_dict keys
     def rename_state_dict_keys(state_dict):
         new_state_dict = {}
         for key, value in state_dict.items():
@@ -250,25 +259,73 @@ def load_original(name: str, device: Union[str, torch.device] = "cuda" if torch.
             new_state_dict[key] = value
         return new_state_dict
 
-    # Rename the keys in the state_dict
-    modified_state_dict = rename_state_dict_keys(model.state_dict())
+    modified_state_dict = rename_state_dict_keys(state_dict or model.state_dict())
+             
+    if not jit:
+        model = build_model(modified_state_dict).to(device)
+        if str(device) == "cpu":
+            model.float()
+        return model, _transform(model.visual.input_resolution)
 
-    # Rebuild the model with the modified state_dict
-    fixed_model = build_model(modified_state_dict).to(device)
+    # patch the device names
+    device_holder = torch.jit.trace(lambda: torch.ones([]).to(torch.device(device)), example_inputs=[])
+    device_node = [n for n in device_holder.graph.findAllNodes("prim::Constant") if "Device" in repr(n)][-1]
 
-    # Load the modified state_dict into the fixed_model
-    try:
-        fixed_model.load_state_dict(modified_state_dict, strict=True)
-    except RuntimeError as e:
-        # If strict=True fails, try strict=False and print the mismatches
-        print("Strict loading failed. Attempting non-strict loading...")
-        fixed_model.load_state_dict(modified_state_dict, strict=False)
-        print(e)
+    def _node_get(node: torch._C.Node, key: str):
+        """Gets attributes of a node which is polymorphic over return type.
+        
+        From https://github.com/pytorch/pytorch/pull/82628
+        """
+        sel = node.kindOf(key)
+        return getattr(node, sel)(key)
 
-    # Set the fixed_model to evaluation mode
-    fixed_model.eval()
+    def patch_device(module):
+        try:
+            graphs = [module.graph] if hasattr(module, "graph") else []
+        except RuntimeError:
+            graphs = []
 
-    return fixed_model, _transform(fixed_model.visual.input_resolution)
+        if hasattr(module, "forward1"):
+            graphs.append(module.forward1.graph)
+
+        for graph in graphs:
+            for node in graph.findAllNodes("prim::Constant"):
+                if "value" in node.attributeNames() and str(_node_get(node, "value")).startswith("cuda"):
+                    node.copyAttributes(device_node)
+
+    model.apply(patch_device)
+    patch_device(model.encode_image)
+    patch_device(model.encode_text)
+
+    # patch dtype to float32 on CPU
+    if str(device) == "cpu":
+        float_holder = torch.jit.trace(lambda: torch.ones([]).float(), example_inputs=[])
+        float_input = list(float_holder.graph.findNode("aten::to").inputs())[1]
+        float_node = float_input.node()
+
+        def patch_float(module):
+            try:
+                graphs = [module.graph] if hasattr(module, "graph") else []
+            except RuntimeError:
+                graphs = []
+
+            if hasattr(module, "forward1"):
+                graphs.append(module.forward1.graph)
+
+            for graph in graphs:
+                for node in graph.findAllNodes("aten::to"):
+                    inputs = list(node.inputs())
+                    for i in [1, 2]:  # dtype can be the second or third argument to aten::to()
+                        if _node_get(inputs[i].node(), "value") == 5:
+                            inputs[i].node().copyAttributes(float_node)
+
+        model.apply(patch_float)
+        patch_float(model.encode_image)
+        patch_float(model.encode_text)
+
+        model.float()
+
+    return model, _transform(model.input_resolution.item())
 
 def tokenize(texts: Union[str, List[str]], context_length: int = 77, truncate: bool = False) -> Union[torch.IntTensor, torch.LongTensor]:
     """
