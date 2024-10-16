@@ -91,7 +91,8 @@ def available_models() -> List[str]:
     return list(_MODELS.keys())
 
 
-def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu", jit: bool = False, download_root: str = None):
+def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu", 
+         jit: bool = False, download_root: str = None):
     """Load a CLIP model
 
     Parameters
@@ -201,7 +202,9 @@ def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_a
 
     return model, _transform(model.input_resolution.item())
 
-def load_original_clip(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu", jit: bool = False, download_root: str = None):
+
+def load_original(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu", 
+                  jit: bool = False, download_root: str = None):
     """
     Load a CLIP model with modified state_dict keys to handle renamed layers.
 
@@ -254,13 +257,13 @@ def load_original_clip(name: str, device: Union[str, torch.device] = "cuda" if t
     fixed_model = build_model(modified_state_dict).to(device)
 
     # Load the modified state_dict into the fixed_model
-    missing_keys, unexpected_keys = fixed_model.load_state_dict(modified_state_dict, strict=False)
-
-    # Optionally, print missing and unexpected keys for debugging
-    if missing_keys:
-        print("Missing keys when loading state_dict:", missing_keys)
-    if unexpected_keys:
-        print("Unexpected keys when loading state_dict:", unexpected_keys)
+    try:
+        fixed_model.load_state_dict(modified_state_dict, strict=True)
+    except RuntimeError as e:
+        # If strict=True fails, try strict=False and print the mismatches
+        print("Strict loading failed. Attempting non-strict loading...")
+        fixed_model.load_state_dict(modified_state_dict, strict=False)
+        print(e)
 
     # Set the fixed_model to evaluation mode
     fixed_model.eval()
