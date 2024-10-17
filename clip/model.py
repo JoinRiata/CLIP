@@ -342,21 +342,23 @@ class CLIP(nn.Module):
 
     def encode_text(self, text):
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
-
         x = x + self.positional_embedding.type(self.dtype)
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
         x = self.ln_final(x).type(self.dtype)
-
+        
         # x.shape = [batch_size, n_ctx, transformer.width]
         # take features from the eot embedding (eot_token is the highest number in each sequence)
-        _, max_indices = torch.max(text, dim=-1)
-    
+        
+        # Get the indices of the maximum values along dim=-1
+        max_indices = torch.topk(text, k=1, dim=-1).indices.squeeze(-1)
+        
         # Use these indices to select the corresponding features from x
         batch_indices = torch.tensor(range(x.shape[0]), device=x.device)
         x = x[batch_indices, max_indices] @ self.text_projection
 
+    return x
         return x
 
     def forward(self, image, text):
