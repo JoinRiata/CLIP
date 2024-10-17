@@ -352,7 +352,10 @@ class CLIP(nn.Module):
         # x.shape = [batch_size, n_ctx, transformer.width]
         # take features from the eot embedding (eot_token is the highest number in each sequence)
         _, max_indices = torch.max(text, dim=-1)
-        x = x[torch.arange(x.shape[0]), max_indices] @ self.text_projection 
+    
+        # Use these indices to select the corresponding features from x
+        batch_indices = torch.tensor(range(x.shape[0]), device=x.device)
+        x = x[batch_indices, max_indices] @ self.text_projection
 
         return x
 
