@@ -357,8 +357,6 @@ class CLIP(nn.Module):
         # Use these indices to select the corresponding features from x
         batch_indices = torch.tensor(range(x.shape[0]), device=x.device)
         x = x[batch_indices, max_indices] @ self.text_projection
-
-    return x
         return x
 
     def forward(self, image, text):
